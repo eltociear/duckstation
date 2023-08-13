@@ -4,6 +4,7 @@
 #include "postprocessing_chain.h"
 #include "gpu_device.h"
 #include "postprocessing_shader_glsl.h"
+#include "postprocessing_shader_fx.h"
 
 #include "core/host.h"
 #include "core/settings.h"
@@ -21,7 +22,18 @@ Log_SetChannel(PostProcessingChain);
 
 static std::unique_ptr<PostProcessingShader> TryLoadingShader(const std::string_view& shader_name)
 {
-  std::string filename(Path::Combine(EmuFolders::Shaders, fmt::format("{}.glsl", shader_name)));
+  std::string filename;
+
+  // Try reshade first.
+  filename = Path::Combine(EmuFolders::Shaders, fmt::format("reshade" FS_OSPATH_SEPARATOR_STR "Shaders" FS_OSPATH_SEPARATOR_STR "{}.fx", shader_name));
+  if (FileSystem::FileExists(filename.c_str()))
+  {
+    std::unique_ptr<PostProcessingShaderFX> shader = std::make_unique<PostProcessingShaderFX>();
+    if (shader->LoadFromFile(std::string(shader_name), filename.c_str()))
+      return shader;
+  }
+
+  filename = Path::Combine(EmuFolders::Shaders, fmt::format("{}.glsl", shader_name));
   if (FileSystem::FileExists(filename.c_str()))
   {
     std::unique_ptr<PostProcessingShaderGLSL> shader = std::make_unique<PostProcessingShaderGLSL>();
@@ -137,6 +149,28 @@ std::vector<std::string> PostProcessingChain::GetAvailableShaderNames()
                           FILESYSTEM_FIND_KEEP_ARRAY,
                         &results);
 
+  for (FILESYSTEM_FIND_DATA& fd : results)
+  {
+    size_t pos = fd.FileName.rfind('.');
+    if (pos != std::string::npos && pos > 0)
+      fd.FileName.erase(pos);
+
+    // swap any backslashes for forward slashes so the config is cross-platform
+    for (size_t i = 0; i < fd.FileName.size(); i++)
+    {
+      if (fd.FileName[i] == '\\')
+        fd.FileName[i] = '/';
+    }
+
+    if (std::none_of(names.begin(), names.end(), [&fd](const std::string& other) { return fd.FileName == other; }))
+    {
+      names.push_back(std::move(fd.FileName));
+    }
+  }
+
+  FileSystem::FindFiles(Path::Combine(EmuFolders::Shaders, "reshade" FS_OSPATH_SEPARATOR_STR "Shaders").c_str(), "*.fx",
+                        FILESYSTEM_FIND_FILES | /*FILESYSTEM_FIND_RECURSIVE | */ FILESYSTEM_FIND_RELATIVE_PATHS,
+                        &results);
   for (FILESYSTEM_FIND_DATA& fd : results)
   {
     size_t pos = fd.FileName.rfind('.');
