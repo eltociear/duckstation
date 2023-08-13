@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include "util/gpu_device.h"
+
 #include "common/types.h"
-#include "util/host_display.h"
+
 #include <functional>
 #include <memory>
 #include <optional>
@@ -24,6 +26,7 @@ public:
   virtual void SetDefaultConfig(SettingsInterface& si) = 0;
 
   virtual bool CreatePlatformWindow(std::string title) = 0;
+  virtual bool HasPlatformWindow() const = 0;
   virtual void DestroyPlatformWindow() = 0;
 
   virtual std::optional<WindowInfo> GetPlatformWindowInfo() = 0;
@@ -46,7 +49,9 @@ public:
 #ifdef _WIN32
   static std::unique_ptr<NoGUIPlatform> CreateWin32Platform();
 #endif
-
+#ifdef __APPLE__
+  static std::unique_ptr<NoGUIPlatform> CreateCocoaPlatform();
+#endif
 #ifdef NOGUI_PLATFORM_WAYLAND
   static std::unique_ptr<NoGUIPlatform> CreateWaylandPlatform();
 #endif

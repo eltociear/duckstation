@@ -67,6 +67,15 @@ if(USE_WAYLAND)
   )
 endif()
 
+if(APPLE)
+  message(STATUS "Building Cocoa NoGUI Platform.")
+  target_sources(duckstation-nogui PRIVATE
+    cocoa_key_names.h
+    cocoa_nogui_platform.mm
+    cocoa_nogui_platform.h
+  )
+endif()
+
 if(USE_DRMKMS AND USE_EVDEV)
   message(STATUS "Building VTY/DRM/KMS/EVDev NoGUI Platform.")
   target_compile_definitions(duckstation-nogui PRIVATE "NOGUI_PLATFORM_VTY=1" "WITH_DRMKMS=1")

@@ -82,7 +82,7 @@ std::optional<WindowInfo> VTYNoGUIPlatform::GetPlatformWindowInfo()
   const std::string fullscreen_mode = Host::GetStringSettingValue("GPU", "FullscreenMode", "");
   if (!fullscreen_mode.empty())
   {
-    if (!HostDisplay::ParseFullscreenMode(fullscreen_mode, &wi.surface_width, &wi.surface_height,
+    if (!GPUDevice::ParseFullscreenMode(fullscreen_mode, &wi.surface_width, &wi.surface_height,
                                           &wi.surface_refresh_rate))
     {
       Log_ErrorPrintf("Failed to parse fullscreen mode '%s'", fullscreen_mode.c_str());
