@@ -24,6 +24,9 @@ public:
   std::string GenerateVRAMFillFragmentShader(bool wrapped, bool interlaced);
   std::string GenerateVRAMUpdateDepthFragmentShader();
 
+  std::string GenerateInterleavedFieldExtractFragmentShader();
+  std::string GenerateFastMADReconstructFragmentShader();
+
   std::string GenerateAdaptiveDownsampleVertexShader();
   std::string GenerateAdaptiveDownsampleMipFragmentShader(bool first_pass);
   std::string GenerateAdaptiveDownsampleBlurFragmentShader();

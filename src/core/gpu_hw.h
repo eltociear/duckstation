@@ -62,7 +62,8 @@ private:
     VRAM_UPDATE_TEXTURE_BUFFER_SIZE = 4 * 1024 * 1024,
     MAX_BATCH_VERTEX_COUNTER_IDS = 65536 - 2,
     MAX_VERTICES_FOR_RECTANGLE = 6 * (((MAX_PRIMITIVE_WIDTH + (TEXTURE_PAGE_WIDTH - 1)) / TEXTURE_PAGE_WIDTH) + 1u) *
-                                 (((MAX_PRIMITIVE_HEIGHT + (TEXTURE_PAGE_HEIGHT - 1)) / TEXTURE_PAGE_HEIGHT) + 1u)
+                                 (((MAX_PRIMITIVE_HEIGHT + (TEXTURE_PAGE_HEIGHT - 1)) / TEXTURE_PAGE_HEIGHT) + 1u),
+    FASTMAD_BUFFER_COUNT = 4,
   };
   static_assert(VRAM_UPDATE_TEXTURE_BUFFER_SIZE >= VRAM_WIDTH * VRAM_HEIGHT * sizeof(u16));
 
@@ -257,6 +258,14 @@ private:
 
   std::unique_ptr<GPU_SW_Backend> m_sw_renderer;
 
+  struct FastMADBuffer
+  {
+    std::unique_ptr<GPUTexture> texture;
+    std::unique_ptr<GPUFramebuffer> framebuffer;
+  };
+  std::array<FastMADBuffer, FASTMAD_BUFFER_COUNT> m_fastmad_buffers;
+  u32 m_current_fastmad_buffer = 0;
+
   BatchVertex* m_batch_start_vertex_ptr = nullptr;
   BatchVertex* m_batch_end_vertex_ptr = nullptr;
   BatchVertex* m_batch_current_vertex_ptr = nullptr;
@@ -278,6 +287,7 @@ private:
     BitField<u8, bool, 4, 1> m_scaled_dithering;
     BitField<u8, bool, 5, 1> m_chroma_smoothing;
     BitField<u8, bool, 6, 1> m_disable_color_perspective;
+    BitField<u8, bool, 7, 1> m_use_fastmad;
 
     u8 bits = 0;
   };
@@ -311,6 +321,9 @@ private:
 
   // [depth_24][interlace_mode]
   DimensionalArray<std::unique_ptr<GPUPipeline>, 3, 2> m_display_pipelines{};
+
+  std::unique_ptr<GPUPipeline> m_interleaved_field_extract_pipeline{};
+  std::unique_ptr<GPUPipeline> m_fastmad_reconstruct_pipeline{};
 
   // TODO: get rid of this, and use image blits instead where supported
   std::unique_ptr<GPUPipeline> m_copy_pipeline;

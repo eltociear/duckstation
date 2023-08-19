@@ -159,6 +159,7 @@ bool GPU_HW::Initialize()
   m_chroma_smoothing = g_settings.gpu_24bit_chroma_smoothing;
   m_downsample_mode = GetDownsampleMode(m_resolution_scale);
   m_disable_color_perspective = m_supports_disable_color_perspective && ShouldDisableColorPerspective();
+  m_use_fastmad = true;
 
   if (m_multisamples != g_settings.gpu_multisamples)
   {
@@ -343,6 +344,7 @@ void GPU_HW::UpdateSettings()
   m_chroma_smoothing = g_settings.gpu_24bit_chroma_smoothing;
   m_downsample_mode = downsample_mode;
   m_disable_color_perspective = disable_color_perspective;
+  m_use_fastmad = true;
 
   if (!m_supports_dual_source_blend && TextureFilterRequiresDualSourceBlend(m_texture_filtering))
     m_texture_filtering = GPUTextureFilter::Nearest;
@@ -533,6 +535,24 @@ bool GPU_HW::CreateBuffers()
 
   Log_InfoPrintf("Created HW framebuffer of %ux%u", texture_width, texture_height);
 
+  if (m_use_fastmad)
+  {
+    const u32 buffer_height = texture_height / 2u;
+    for (u32 i = 0; i < FASTMAD_BUFFER_COUNT; i++)
+    {
+      FastMADBuffer& buf = m_fastmad_buffers[i];
+      if (!(buf.texture = g_gpu_device->CreateTexture(texture_width, buffer_height, 1, 1, 1,
+                                                      GPUTexture::Type::RenderTarget, VRAM_RT_FORMAT)) ||
+          !(buf.framebuffer = g_gpu_device->CreateFramebuffer(buf.texture.get())))
+      {
+        return false;
+      }
+
+      GL_OBJECT_NAME(buf.texture, "FastMAD Buffer %u Texture", i);
+      GL_OBJECT_NAME(buf.framebuffer, "FastMAD Buffer %u Framebuffer", i);
+    }
+  }
+
   if (m_downsample_mode == GPUDownsampleMode::Adaptive)
   {
     const u32 levels = GetAdaptiveDownsamplingMipLevels();
@@ -572,10 +592,22 @@ void GPU_HW::ClearFramebuffer()
   ClearVRAMDirtyRectangle();
   g_gpu_device->ClearRenderTarget(m_display_texture.get(), 0);
   m_last_depth_z = 1.0f;
+
+  for (FastMADBuffer& buf : m_fastmad_buffers)
+  {
+    if (buf.texture)
+      g_gpu_device->ClearRenderTarget(buf.texture.get(), 0);
+  }
 }
 
 void GPU_HW::DestroyBuffers()
 {
+  for (FastMADBuffer& buf : m_fastmad_buffers)
+  {
+    buf.framebuffer.reset();
+    buf.texture.reset();
+  }
+
   m_vram_upload_buffer.reset();
   m_downsample_weight_framebuffer.reset();
   m_downsample_weight_texture.reset();
@@ -931,6 +963,36 @@ bool GPU_HW::CompilePipelines()
       return false;
   }
 
+  if (m_use_fastmad)
+  {
+    std::unique_ptr<GPUShader> fs =
+      g_gpu_device->CreateShader(GPUShaderStage::Fragment, shadergen.GenerateInterleavedFieldExtractFragmentShader());
+    if (!fs)
+      return false;
+    GL_OBJECT_NAME(fs, "Interleaved Field Extract Fragment Shader");
+
+    plconfig.vertex_shader = fullscreen_quad_vertex_shader.get();
+    plconfig.fragment_shader = fs.get();
+
+    if (!(m_interleaved_field_extract_pipeline = g_gpu_device->CreatePipeline(plconfig)))
+      return false;
+    GL_OBJECT_NAME(m_interleaved_field_extract_pipeline, "Interleaved Field Extract Pipeline");
+
+    fs = g_gpu_device->CreateShader(GPUShaderStage::Fragment, shadergen.GenerateFastMADReconstructFragmentShader());
+    if (!fs)
+      return false;
+
+    GL_OBJECT_NAME(fs, "FastMAD Reconstruct Fragment Shader");
+
+    plconfig.layout = GPUPipeline::Layout::MultiTextureAndPushConstants;
+    plconfig.fragment_shader = fs.get();
+    if (!(m_fastmad_reconstruct_pipeline = g_gpu_device->CreatePipeline(plconfig)))
+      return false;
+    GL_OBJECT_NAME(m_fastmad_reconstruct_pipeline, "FastMAD Reconstruct Pipeline");
+  }
+
+  plconfig.layout = GPUPipeline::Layout::SingleTextureAndPushConstants;
+
   if (m_downsample_mode == GPUDownsampleMode::Adaptive)
   {
     std::unique_ptr<GPUShader> vs =
@@ -998,6 +1060,7 @@ bool GPU_HW::CompilePipelines()
       return false;
 
     GL_OBJECT_NAME(fs, "Downsample First Pass Fragment Shader");
+    plconfig.vertex_shader = fullscreen_quad_vertex_shader.get();
     plconfig.fragment_shader = fs.get();
 
     if (!(m_downsample_first_pass_pipeline = g_gpu_device->CreatePipeline(plconfig)))
@@ -1035,6 +1098,9 @@ void GPU_HW::DestroyPipelines()
   destroy(m_downsample_blur_pass_pipeline);
   destroy(m_downsample_composite_pass_pipeline);
   m_downsample_composite_sampler.reset();
+
+  destroy(m_interleaved_field_extract_pipeline);
+  destroy(m_fastmad_reconstruct_pipeline);
 
   m_display_pipelines.enumerate(destroy);
 }
@@ -2431,35 +2497,100 @@ void GPU_HW::UpdateDisplay()
     }
     else
     {
-      // TODO: discard vs load for interlaced
-      if (interlaced == InterlacedRenderMode::None)
-        g_gpu_device->InvalidateRenderTarget(m_display_texture.get());
-
-      g_gpu_device->SetFramebuffer(m_display_framebuffer.get());
-      g_gpu_device->SetPipeline(
-        m_display_pipelines[BoolToUInt8(m_GPUSTAT.display_area_color_depth_24)][static_cast<u8>(interlaced)].get());
-      g_gpu_device->SetTextureSampler(0, m_vram_texture.get(), g_gpu_device->GetNearestSampler());
-
       const u32 reinterpret_field_offset = (interlaced != InterlacedRenderMode::None) ? GetInterlacedDisplayField() : 0;
-      const u32 reinterpret_start_x = m_crtc_state.regs.X * resolution_scale;
-      const u32 reinterpret_crop_left = (m_crtc_state.display_vram_left - m_crtc_state.regs.X) * resolution_scale;
-      const u32 uniforms[4] = {reinterpret_start_x, scaled_vram_offset_y + reinterpret_field_offset,
-                               reinterpret_crop_left, reinterpret_field_offset};
-      g_gpu_device->PushUniformBuffer(uniforms, sizeof(uniforms));
 
-      Assert(scaled_display_width <= m_display_texture->GetWidth() &&
-             scaled_display_height <= m_display_texture->GetHeight());
+      if (!m_GPUSTAT.display_area_color_depth_24 && interlaced != InterlacedRenderMode::None && m_use_fastmad)
+      {
+        const u32 this_buffer = m_current_fastmad_buffer;
+        FastMADBuffer& cbuf = m_fastmad_buffers[this_buffer];
+        m_current_fastmad_buffer = (m_current_fastmad_buffer + 1u) % FASTMAD_BUFFER_COUNT;
 
-      g_gpu_device->SetViewportAndScissor(0, 0, scaled_display_width, scaled_display_height);
-      g_gpu_device->Draw(3, 0);
+        if (interlaced == InterlacedRenderMode::InterleavedFields)
+        {
+          const float uniforms[4] = {
+            static_cast<float>(scaled_vram_offset_x) / static_cast<float>(m_vram_texture->GetWidth()),
+            static_cast<float>(scaled_vram_offset_y + reinterpret_field_offset) /
+              static_cast<float>(m_vram_texture->GetHeight()),
+            static_cast<float>(scaled_display_width) / static_cast<float>(m_vram_texture->GetWidth()),
+            static_cast<float>(scaled_display_height) / static_cast<float>(m_vram_texture->GetHeight())};
+
+          g_gpu_device->ClearRenderTarget(cbuf.texture.get(), 0);
+          g_gpu_device->SetFramebuffer(cbuf.framebuffer.get());
+          g_gpu_device->SetPipeline(m_interleaved_field_extract_pipeline.get());
+          g_gpu_device->SetTextureSampler(0, m_vram_texture.get(), g_gpu_device->GetNearestSampler());
+          g_gpu_device->SetViewportAndScissor(0, 0, scaled_display_width, scaled_display_height / 2u);
+          g_gpu_device->PushUniformBuffer(uniforms, sizeof(uniforms));
+          g_gpu_device->Draw(3, 0);
+        }
+        else
+        {
+          g_gpu_device->CopyTextureRegion(cbuf.texture.get(), 0, 0, 0, 0, m_vram_texture.get(), scaled_vram_offset_x,
+                                          scaled_vram_offset_y, 0, 0, scaled_display_width, scaled_display_height / 2u);
+        }
+
+        struct FastMADUniforms
+        {
+          float uv_scale[2];
+          u32 current_field;
+          u32 height;
+        };
+
+        const FastMADUniforms uniforms = {
+          static_cast<float>(scaled_display_width) / static_cast<float>(cbuf.texture->GetWidth()),
+          static_cast<float>(scaled_display_height / 2u) / static_cast<float>(cbuf.texture->GetHeight()),
+          reinterpret_field_offset, scaled_display_height};
+        GPUSampler* const sampler = g_gpu_device->GetNearestSampler();
+
+        g_gpu_device->ClearRenderTarget(m_display_texture.get(), 0);
+        g_gpu_device->SetFramebuffer(m_display_framebuffer.get());
+        g_gpu_device->SetPipeline(m_fastmad_reconstruct_pipeline.get());
+        g_gpu_device->SetTextureSampler(0, cbuf.texture.get(), sampler);
+        g_gpu_device->SetTextureSampler(1, m_fastmad_buffers[(this_buffer - 1) % FASTMAD_BUFFER_COUNT].texture.get(),
+                                        sampler);
+        g_gpu_device->SetTextureSampler(2, m_fastmad_buffers[(this_buffer - 2) % FASTMAD_BUFFER_COUNT].texture.get(),
+                                        sampler);
+        g_gpu_device->SetTextureSampler(3, m_fastmad_buffers[(this_buffer - 3) % FASTMAD_BUFFER_COUNT].texture.get(),
+                                        sampler);
+        g_gpu_device->PushUniformBuffer(&uniforms, sizeof(uniforms));
+        g_gpu_device->SetViewportAndScissor(0, 0, scaled_display_width, scaled_display_height);
+        g_gpu_device->Draw(3, 0);
+
+        if (IsUsingDownsampling())
+          DownsampleFramebuffer(m_display_texture.get(), 0, 0, scaled_display_width, scaled_display_height);
+        else
+          g_gpu_device->SetDisplayTexture(m_display_texture.get(), 0, 0, scaled_display_width, scaled_display_height);
+      }
+      else
+      {
+        // TODO: discard vs load for interlaced
+        if (interlaced == InterlacedRenderMode::None)
+          g_gpu_device->InvalidateRenderTarget(m_display_texture.get());
+
+        g_gpu_device->SetFramebuffer(m_display_framebuffer.get());
+        g_gpu_device->SetPipeline(
+          m_display_pipelines[BoolToUInt8(m_GPUSTAT.display_area_color_depth_24)][static_cast<u8>(interlaced)].get());
+        g_gpu_device->SetTextureSampler(0, m_vram_texture.get(), g_gpu_device->GetNearestSampler());
+
+        const u32 reinterpret_start_x = m_crtc_state.regs.X * resolution_scale;
+        const u32 reinterpret_crop_left = (m_crtc_state.display_vram_left - m_crtc_state.regs.X) * resolution_scale;
+        const u32 uniforms[4] = {reinterpret_start_x, scaled_vram_offset_y + reinterpret_field_offset,
+                                 reinterpret_crop_left, reinterpret_field_offset};
+        g_gpu_device->PushUniformBuffer(uniforms, sizeof(uniforms));
+
+        Assert(scaled_display_width <= m_display_texture->GetWidth() &&
+               scaled_display_height <= m_display_texture->GetHeight());
+
+        g_gpu_device->SetViewportAndScissor(0, 0, scaled_display_width, scaled_display_height);
+        g_gpu_device->Draw(3, 0);
+      }
 
       if (IsUsingDownsampling())
         DownsampleFramebuffer(m_display_texture.get(), 0, 0, scaled_display_width, scaled_display_height);
       else
         g_gpu_device->SetDisplayTexture(m_display_texture.get(), 0, 0, scaled_display_width, scaled_display_height);
-
-      RestoreGraphicsAPIState();
     }
+
+    RestoreGraphicsAPIState();
   }
 }
 

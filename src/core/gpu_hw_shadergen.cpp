@@ -1329,6 +1329,86 @@ std::string GPU_HW_ShaderGen::GenerateVRAMUpdateDepthFragmentShader()
   return ss.str();
 }
 
+std::string GPU_HW_ShaderGen::GenerateInterleavedFieldExtractFragmentShader()
+{
+  std::stringstream ss;
+  WriteHeader(ss);
+  WriteCommonFunctions(ss);
+  DeclareUniformBuffer(ss, {"float2 u_offset", "float2 u_scale"}, true);
+  DeclareTexture(ss, "samp0", 0);
+
+  DeclareFragmentEntryPoint(ss, 0, 1, {}, true);
+
+  ss << R"(
+{
+  o_col0 = SAMPLE_TEXTURE_LEVEL(samp0, (v_tex0 * u_scale) + u_offset, 0);
+}
+)";
+
+  return ss.str();
+}
+
+std::string GPU_HW_ShaderGen::GenerateFastMADReconstructFragmentShader()
+{
+  std::stringstream ss;
+  WriteHeader(ss);
+  WriteCommonFunctions(ss);
+  DeclareUniformBuffer(ss, {"float2 u_scale", "uint u_current_field", "uint u_height"}, true);
+  DeclareTexture(ss, "samp0", 0, false);
+  DeclareTexture(ss, "samp1", 1, false);
+  DeclareTexture(ss, "samp2", 2, false);
+  DeclareTexture(ss, "samp3", 3, false);
+
+  ss << R"(
+float lum(float4 rgb)
+{
+  return dot(rgb, float4(0.299, 0.587, 0.114, 0.0));
+}
+)";
+
+  DeclareFragmentEntryPoint(ss, 0, 1, {}, true);
+  ss << R"(
+{
+  float2 uv = v_tex0 * u_scale; // buffers are half-height
+
+  float4 hn = SAMPLE_TEXTURE_LEVEL_OFFSET(samp0, uv, 0, int2(0, -1));
+  float4 cn = SAMPLE_TEXTURE_LEVEL(samp0, uv, 0);
+  float4 ln = SAMPLE_TEXTURE_LEVEL_OFFSET(samp0, uv, 0, int2(0, 1));
+
+  float4 prev = SAMPLE_TEXTURE_LEVEL(samp1, uv, 0);
+
+  float mh = abs(lum(hn) - lum(SAMPLE_TEXTURE_LEVEL_OFFSET(samp2, uv, 0, int2(0, -1))));
+  float ml = abs(lum(ln) - lum(SAMPLE_TEXTURE_LEVEL_OFFSET(samp2, uv, 0, int2(0, 1))));
+  float mc = abs(lum(prev) - lum(SAMPLE_TEXTURE_LEVEL(samp3, uv, 0)));
+
+  // Is pixel F [n][ x , y ] present in the Current Field f [n] ?
+  uint row = uint(v_pos.y);
+  if ((row & 1u) == u_current_field)
+  {
+    // Directly uses the pixel from the Current Field
+    o_col0 = cn;
+  }
+  else
+  {
+    const float mmax = 0.01;
+    if (((mc > mmax) || (min(ml, mh) > mmax)) && (row > 0 && row < u_height))
+    {
+      // Reconstructs the missing pixel as the average of the same pixel from the line above and the
+      // line below it in the Current Field.
+      o_col0 = (hn + ln) / 2.0;
+    }
+    else
+    {
+      // Reconstructs the missing pixel as the same pixel from the Previous Field.
+      o_col0 = prev;
+    }
+  }
+}
+)";
+
+  return ss.str();
+}
+
 void GPU_HW_ShaderGen::WriteAdaptiveDownsampleUniformBuffer(std::stringstream& ss)
 {
   DeclareUniformBuffer(ss, {"float2 u_uv_min", "float2 u_uv_max", "float2 u_rcp_resolution", "float u_lod"}, true);
