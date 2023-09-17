@@ -48,12 +48,16 @@ static std::vector<std::unique_ptr<PostProcessing::Shader>> s_stages;
 static bool s_enabled = false;
 
 static GPUTexture::Format s_target_format = GPUTexture::Format::Unknown;
+static GPUTexture::Format s_depth_format = GPUTexture::Format::Unknown;
 static u32 s_target_width = 0;
 static u32 s_target_height = 0;
 static Common::Timer s_timer;
 
 static std::unique_ptr<GPUTexture> s_input_texture;
 static std::unique_ptr<GPUFramebuffer> s_input_framebuffer;
+
+static std::unique_ptr<GPUTexture> s_input_depth_texture;
+static std::unique_ptr<GPUFramebuffer> s_input_depth_framebuffer;
 
 static std::unique_ptr<GPUTexture> s_output_texture;
 static std::unique_ptr<GPUFramebuffer> s_output_framebuffer;
@@ -598,6 +602,16 @@ GPUFramebuffer* PostProcessing::GetInputFramebuffer()
   return s_input_framebuffer.get();
 }
 
+GPUTexture* PostProcessing::GetInputDepthTexture()
+{
+  return s_input_depth_texture.get();
+}
+
+GPUFramebuffer* PostProcessing::GetInputDepthFramebuffer()
+{
+  return s_input_depth_framebuffer.get();
+}
+
 const Common::Timer& PostProcessing::GetTimer()
 {
   return s_timer;
@@ -631,7 +645,8 @@ GPUTexture* PostProcessing::GetDummyTexture()
   return s_dummy_texture.get();
 }
 
-bool PostProcessing::CheckTargets(GPUTexture::Format target_format, u32 target_width, u32 target_height)
+bool PostProcessing::CheckTargets(GPUTexture::Format target_format, GPUTexture::Format depth_format, u32 target_width,
+                                  u32 target_height)
 {
   if (s_target_format == target_format && s_target_width == target_width && s_target_height == target_height)
     return true;
@@ -642,6 +657,16 @@ bool PostProcessing::CheckTargets(GPUTexture::Format target_format, u32 target_w
   if (!(s_input_texture = g_gpu_device->CreateTexture(target_width, target_height, 1, 1, 1,
                                                       GPUTexture::Type::RenderTarget, target_format)) ||
       !(s_input_framebuffer = g_gpu_device->CreateFramebuffer(s_input_texture.get())))
+  {
+    return false;
+  }
+
+  if (depth_format != GPUTexture::Format::Unknown &&
+      (!(s_input_depth_texture = g_gpu_device->CreateTexture(
+           target_width, target_height, 1, 1, 1,
+           GPUTexture::IsDepthFormat(depth_format) ? GPUTexture::Type::DepthStencil : GPUTexture::Type::RenderTarget,
+           depth_format)) ||
+       !(s_input_depth_framebuffer = g_gpu_device->CreateFramebuffer(s_input_depth_texture.get()))))
   {
     return false;
   }
@@ -668,6 +693,7 @@ bool PostProcessing::CheckTargets(GPUTexture::Format target_format, u32 target_w
   }
 
   s_target_format = target_format;
+  s_depth_format = depth_format;
   s_target_width = target_width;
   s_target_height = target_height;
   return true;
@@ -676,11 +702,15 @@ bool PostProcessing::CheckTargets(GPUTexture::Format target_format, u32 target_w
 void PostProcessing::DestroyTextures()
 {
   s_target_format = GPUTexture::Format::Unknown;
+  s_depth_format = GPUTexture::Format::Unknown;
   s_target_width = 0;
   s_target_height = 0;
 
   s_output_framebuffer.reset();
   s_output_texture.reset();
+
+  s_input_depth_framebuffer.reset();
+  s_input_depth_texture.reset();
 
   s_input_framebuffer.reset();
   s_input_texture.reset();
@@ -689,14 +719,9 @@ void PostProcessing::DestroyTextures()
 bool PostProcessing::Apply(GPUFramebuffer* final_target, s32 final_left, s32 final_top, s32 final_width,
                            s32 final_height, s32 orig_width, s32 orig_height)
 {
-  GL_SCOPE("PostProcessing Apply");
+  Assert(s_input_texture && s_output_texture);
 
-  const u32 target_width = final_target ? final_target->GetWidth() : g_gpu_device->GetWindowWidth();
-  const u32 target_height = final_target ? final_target->GetHeight() : g_gpu_device->GetWindowHeight();
-  const GPUTexture::Format target_format =
-    final_target ? final_target->GetRT()->GetFormat() : g_gpu_device->GetWindowFormat();
-  if (!CheckTargets(target_format, target_width, target_height))
-    return false;
+  GL_SCOPE("PostProcessing Apply");
 
   g_gpu_device->SetViewportAndScissor(final_left, final_top, final_width, final_height);
 

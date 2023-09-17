@@ -326,8 +326,14 @@ bool PostProcessing::ReShadeFXShader::CreateModule(s32 buffer_width, s32 buffer_
   pp.add_macro_definition("__RESHADE__", "50901");
   pp.add_macro_definition("BUFFER_WIDTH", std::to_string(buffer_width)); // TODO: can we make these uniforms?
   pp.add_macro_definition("BUFFER_HEIGHT", std::to_string(buffer_height));
-  pp.add_macro_definition("BUFFER_RCP_WIDTH", fmt::format("({}.0 / BUFFER_WIDTH)", buffer_width));
-  pp.add_macro_definition("BUFFER_RCP_HEIGHT", fmt::format("({}.0 / BUFFER_HEIGHT)", buffer_height));
+  //pp.add_macro_definition("BUFFER_RCP_WIDTH", fmt::format("({}.0 / BUFFER_WIDTH)", buffer_width));
+  //pp.add_macro_definition("BUFFER_RCP_HEIGHT", fmt::format("({}.0 / BUFFER_HEIGHT)", buffer_height));
+  pp.add_macro_definition("BUFFER_RCP_WIDTH", std::to_string(1.0f / static_cast<float>(buffer_width)));
+  pp.add_macro_definition("BUFFER_RCP_HEIGHT", std::to_string(1.0f / static_cast<float>(buffer_height)));
+  //pp.add_macro_definition("RESHADE_DEPTH_MULTIPLIER", "0.013");
+  //pp.add_macro_definition("RESHADE_DEPTH_INPUT_IS_LOGARITHMIC", "1");
+  pp.add_macro_definition("RESHADE_DEPTH_LINEARIZATION_FAR_PLANE", "30.0");
+  //pp.add_macro_definition("RESHADE_DEPTH_INPUT_IS_REVERSED", "1");
 
   switch (GetRenderAPI())
   {
@@ -367,7 +373,7 @@ bool PostProcessing::ReShadeFXShader::CreateModule(s32 buffer_width, s32 buffer_
 
   cg->write_result(*mod);
 
-  // FileSystem::WriteBinaryFile("D:\\out.txt", mod->code.data(), mod->code.size());
+  FileSystem::WriteBinaryFile("D:\\out.txt", mod->code.data(), mod->code.size());
   return true;
 }
 
@@ -683,9 +689,14 @@ bool PostProcessing::ReShadeFXShader::GetSourceOption(const reshadefx::uniform_i
       *si = SourceOptionType::MousePoint;
       return true;
     }
-    else if (source == "overlay_active" || source == "has_depth")
+    else if (source == "overlay_active")
     {
       *si = SourceOptionType::Zero;
+      return true;
+    }
+    else if (source == "has_depth")
+    {
+      *si = SourceOptionType::One;
       return true;
     }
     else if (source == "bufferwidth")
@@ -943,7 +954,7 @@ GPUTexture* PostProcessing::ReShadeFXShader::GetTextureByID(TextureID id, GPUTex
     }
     else if (id == INPUT_DEPTH_TEXTURE)
     {
-      return PostProcessing::GetDummyTexture();
+      return PostProcessing::GetInputDepthTexture();
     }
     else if (id == OUTPUT_COLOR_TEXTURE)
     {
@@ -1165,6 +1176,13 @@ bool PostProcessing::ReShadeFXShader::Apply(GPUTexture* input, GPUFramebuffer* f
         case SourceOptionType::Zero:
         {
           const u32 value = 0;
+          std::memcpy(dst, &value, sizeof(value));
+        }
+        break;
+
+        case SourceOptionType::One:
+        {
+          const float value = 1.0f;
           std::memcpy(dst, &value, sizeof(value));
         }
         break;

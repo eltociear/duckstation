@@ -239,6 +239,7 @@ private:
 
   std::unique_ptr<GPUTexture> m_vram_texture;
   std::unique_ptr<GPUTexture> m_vram_depth_texture;
+  std::unique_ptr<GPUTexture> m_vram_depth_copy_texture;
   std::unique_ptr<GPUTexture> m_vram_depth_view;
   std::unique_ptr<GPUTexture> m_vram_read_texture;
   std::unique_ptr<GPUTexture> m_vram_readback_texture;
@@ -247,6 +248,7 @@ private:
 
   std::unique_ptr<GPUFramebuffer> m_vram_framebuffer;
   std::unique_ptr<GPUFramebuffer> m_vram_update_depth_framebuffer;
+  std::unique_ptr<GPUFramebuffer> m_vram_depth_copy_framebuffer;
   std::unique_ptr<GPUFramebuffer> m_vram_readback_framebuffer;
   std::unique_ptr<GPUFramebuffer> m_display_framebuffer;
 
@@ -284,6 +286,7 @@ private:
   bool m_true_color = true;
   bool m_using_uv_limits = false;
   bool m_pgxp_depth_buffer = false;
+  bool m_depth_was_cleared = false;
 
   BatchConfig m_batch;
   BatchUBOData m_batch_ubo_data = {};
@@ -313,6 +316,7 @@ private:
 
   // TODO: get rid of this, and use image blits instead where supported
   std::unique_ptr<GPUPipeline> m_copy_pipeline;
+  std::unique_ptr<GPUPipeline> m_copy_depth_pipeline;
 
   std::unique_ptr<GPUTexture> m_downsample_texture;
   std::unique_ptr<GPUTexture> m_downsample_render_texture;

@@ -348,7 +348,7 @@ bool D3D11Texture::Create(ID3D11Device* device, u32 width, u32 height, u32 layer
       bind_flags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
       break;
     case Type::DepthStencil:
-      bind_flags = D3D11_BIND_DEPTH_STENCIL; // | D3D11_BIND_SHADER_RESOURCE;
+      bind_flags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
       break;
     case Type::Texture:
       bind_flags = D3D11_BIND_SHADER_RESOURCE;

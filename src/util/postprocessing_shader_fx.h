@@ -40,6 +40,7 @@ private:
   {
     None,
     Zero,
+    One,
     Timer,
     FrameTime,
     FrameCount,
