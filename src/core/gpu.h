@@ -11,6 +11,7 @@
 #include "common/bitfield.h"
 #include "common/fifo_queue.h"
 #include "common/rectangle.h"
+#include "common/types.h"
 
 #include <algorithm>
 #include <array>
@@ -353,9 +354,6 @@ protected:
   std::unique_ptr<TimingEvent> m_crtc_tick_event;
   std::unique_ptr<TimingEvent> m_command_tick_event;
 
-  // Pointer to VRAM, used for reads/writes. In the hardware backends, this is the shadow buffer.
-  u16* m_vram_ptr = nullptr;
-
   union GPUSTAT
   {
     u32 bits;
@@ -632,3 +630,4 @@ private:
 };
 
 extern std::unique_ptr<GPU> g_gpu;
+extern u16 g_vram[VRAM_SIZE / sizeof(u16)];
