@@ -37,6 +37,9 @@ static constexpr GPUTexture::Format VRAM_DS_FORMAT = GPUTexture::Format::D16;
 static u32 s_draw_number = 0;
 #endif
 
+// TODO
+bool USE_TEXTURE_CACHE = true;
+
 template<typename T>
 ALWAYS_INLINE static constexpr std::tuple<T, T> MinMax(T v1, T v2)
 {
@@ -1359,6 +1362,18 @@ void GPU_HW::DrawBatchVertices(BatchRenderMode render_mode, u32 num_vertices, u3
     m_batch_pipelines[depth_test][static_cast<u8>(render_mode)][static_cast<u8>(m_batch.texture_mode)][static_cast<u8>(
       m_batch.transparency_mode)][BoolToUInt8(m_batch.dithering)][BoolToUInt8(m_batch.interlacing)]
       .get());
+
+  // TOOD: Totally not optimized.
+  if ((m_batch.texture_mode & ~GPUTextureMode::RawTextureBit) == GPUTextureMode::Reserved_Direct16Bit)
+  {
+    DebugAssert(m_batch.tex_source);
+    g_gpu_device->SetTextureSampler(0, m_batch.tex_source->texture.get(), g_gpu_device->GetNearestSampler());
+  }
+  else if (m_batch.texture_mode != GPUTextureMode::Disabled)
+  {
+    g_gpu_device->SetTextureSampler(0, m_vram_read_texture.get(), g_gpu_device->GetNearestSampler());
+  }
+
   g_gpu_device->Draw(num_vertices, base_vertex);
 }
 
@@ -2418,6 +2433,12 @@ void GPU_HW::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, b
     std::memcpy(cmd->data, data, sizeof(u16) * num_words);
     m_sw_renderer->PushCommand(cmd);
   }
+  else
+  {
+    // TODO: Doesn't work with above
+    if (USE_TEXTURE_CACHE)
+      GPU::UpdateVRAM(x, y, width, height, data, set_mask, check_mask);
+  }
 
   const Common::Rectangle<u32> bounds = GetVRAMTransferBounds(x, y, width, height);
   DebugAssert(bounds.right <= VRAM_WIDTH && bounds.bottom <= VRAM_HEIGHT);
@@ -2671,6 +2692,7 @@ void GPU_HW::DispatchRenderCommand()
     }
 
     texture_mode = m_draw_mode.mode_reg.texture_mode;
+    texture_mode = (texture_mode == GPUTextureMode::Reserved_Direct16Bit) ? GPUTextureMode::Direct16Bit : texture_mode;
     if (rc.raw_texture_enable)
     {
       texture_mode =
@@ -2696,6 +2718,22 @@ void GPU_HW::DispatchRenderCommand()
   }
 
   EnsureVertexBufferSpaceForCurrentCommand();
+
+  // TODO: don't need to flush if source page isn't dirty
+  // Don't null out tex_source
+  if (USE_TEXTURE_CACHE && texture_mode != GPUTextureMode::Disabled)
+  {
+    const GPUTextureCache::SourceKey key(m_draw_mode.mode_reg.texture_page, m_draw_mode.palette_reg, texture_mode);
+    if (!m_batch.tex_source || m_batch.tex_source->key != key)
+    {
+      FlushRender();
+      EnsureVertexBufferSpaceForCurrentCommand();
+    }
+
+    m_batch.tex_source = m_texture_cache.LookupSource(key);
+    if (m_batch.tex_source)
+      texture_mode = (texture_mode & GPUTextureMode::RawTextureBit) | GPUTextureMode::Reserved_Direct16Bit;
+  }
 
   if (GetBatchVertexCount() == 0)
   {
@@ -2808,6 +2846,9 @@ void GPU_HW::FlushRender()
       DrawBatchVertices(m_batch.GetRenderMode(), vertex_count, m_batch_base_vertex);
     }
   }
+
+  m_batch.tex_source = nullptr;
+  m_batch.texture_mode = GPUTextureMode::Disabled;
 
   if (m_wireframe_mode != GPUWireframeMode::Disabled)
   {

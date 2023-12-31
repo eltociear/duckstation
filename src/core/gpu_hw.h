@@ -4,6 +4,7 @@
 #pragma once
 
 #include "gpu.h"
+#include "gpu_hw_texture_cache.h"
 #include "texture_replacements.h"
 
 #include "util/gpu_device.h"
@@ -101,6 +102,8 @@ private:
     bool set_mask_while_drawing = false;
     bool check_mask_before_draw = false;
     bool use_depth_buffer = false;
+
+    const GPUTextureCache::Source* tex_source = nullptr;
 
     // Returns the render mode for this batch.
     BatchRenderMode GetRenderMode() const;
@@ -298,4 +301,6 @@ private:
   // Statistics
   RendererStats m_renderer_stats = {};
   RendererStats m_last_renderer_stats = {};
+
+  GPUTextureCache m_texture_cache;
 };

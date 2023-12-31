@@ -172,6 +172,7 @@ union GPUDrawModeReg
 
   u16 bits;
 
+  BitField<u16, u8, 0, 5> texture_page;
   BitField<u16, u8, 0, 4> texture_page_x_base;
   BitField<u16, u8, 4, 1> texture_page_y_base;
   BitField<u16, GPUTransparencyMode, 5, 2> transparency_mode;
@@ -212,8 +213,14 @@ union GPUTexturePaletteReg
   /// Returns a rectangle comprising the texture palette area.
   ALWAYS_INLINE_RELEASE Common::Rectangle<u32> GetRectangle(GPUTextureMode mode) const
   {
+    return Common::Rectangle<u32>::FromExtents(GetXBase(), GetYBase(), GetWidth(mode), 1);
+  }
+
+  /// Returns the width of the palette.
+  ALWAYS_INLINE static u32 GetWidth(GPUTextureMode mode)
+  {
     static constexpr std::array<u32, 4> palette_widths = {{16, 256, 0, 0}};
-    return Common::Rectangle<u32>::FromExtents(GetXBase(), GetYBase(), palette_widths[static_cast<u8>(mode)], 1);
+    return palette_widths[static_cast<u8>(mode)];
   }
 };
 
